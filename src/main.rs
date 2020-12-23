@@ -5,6 +5,7 @@ use crossterm:: {
 use std::{collections::HashMap, io::Write};
 use futures::{future::FutureExt, select, StreamExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::io::AsyncWriteExt;
 use tokio_serial::{Serial, DataBits, StopBits, Parity, FlowControl};
 use tokio_util::codec::BytesCodec;
 use structopt::StructOpt;
@@ -66,14 +67,13 @@ async fn real_main() -> Result<()> {
     #[cfg(unix)]
     port.set_exclusive(true)?;
     println!("Connected to {}", port_name);
-    let mut listener = TcpListener::bind("127.0.0.1:12345").await?;
     enable_raw_mode()?;
-    let result = monitor(&mut port, &mut listener, &opt).await;
+    let result = monitor(&mut port, &opt).await;
     disable_raw_mode()?;
     result
 }
 
-async fn monitor(port: &mut Serial, listener: &mut TcpListener, opt: &Opt) -> Result<()> {
+async fn monitor(port: &mut Serial, opt: &Opt) -> Result<()> {
 
     let mut reader = EventStream::new();
     let (rx_port, tx_port) = tokio::io::split(port);
@@ -89,12 +89,12 @@ async fn monitor(port: &mut Serial, listener: &mut TcpListener, opt: &Opt) -> Re
     let mut client_num : usize = 0;
     let mut clients:HashMap<usize, TcpStream> = HashMap::new();
     let mut poll_send = serial_consumer.map(Ok).forward(serial_sink);
-
-    loop{
+    let mut listener = TcpListener::bind("0.0.0.0:12345").await?;
+      loop{
         select! {
-            _ = poll_send => {},
-            maybe_event = reader.next().fuse() => {
-                match maybe_event {
+            _ = poll_send => {}
+            event = reader.next().fuse() => {
+                match event {
                     Some(Ok(event)) => {
                         if event == exit_code {
                             break;
@@ -113,8 +113,8 @@ async fn monitor(port: &mut Serial, listener: &mut TcpListener, opt: &Opt) -> Re
                     },
                 }
             },
-            maybe_serial = serial_reader.next().fuse() => {
-                match maybe_serial {
+            serial = serial_reader.next().fuse() => {
+                match serial {
                     Some(Ok(serial_event)) => {
                         if opt.debug {
                             println!("Serial Event:{:?}\r", serial_event);
@@ -133,19 +133,20 @@ async fn monitor(port: &mut Serial, listener: &mut TcpListener, opt: &Opt) -> Re
                     },
                 }
             },
-            maybe_client = listener.next().fuse() => {
-                match maybe_client{
-                    Some(Ok(maybe_client)) => {
-                        println!("client: {:?}\r", maybe_client);
+            client = listener.next().fuse() => {
+                match client{
+                    Some(Ok(mut client)) => {
+                        println!("client: {:?}\r", client.peer_addr().unwrap());
+                        client.write_all(b"hello").await?;
                         client_num += 1;
-                        clients.insert(client_num, maybe_client);
+                        clients.insert(client_num, client);
                     },
                     Some(Err(e)) => {
                         println!("tcp accept failed: {}\r", e);
                         break;
                     },
                     None => {
-                        println!("maybe_client returned None\r");
+                        println!("client returned None\r");
                     }
                 }
             },
