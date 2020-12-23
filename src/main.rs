@@ -2,13 +2,15 @@ use crossterm:: {
     event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers},
     terminal::{disable_raw_mode, enable_raw_mode},
 };
-use mio_serial::SerialPort;
 use std::{collections::HashMap, io::Write};
 use futures::{future::FutureExt, select, StreamExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_serial::{Serial, DataBits, StopBits, Parity, FlowControl};
-use tokio_util::codec::{BytesCodec, Decoder};
+use tokio_util::codec::BytesCodec;
 use structopt::StructOpt;
+use bytes::Bytes;
+mod string_decoder;
+use string_decoder::StringDecoder;
 mod error;
 use error::{Result, ProgramError};
 
@@ -61,6 +63,8 @@ async fn real_main() -> Result<()> {
     let err_port = port_name.clone();
     let mut port = tokio_serial::Serial::from_path(port_name.clone(), &settings)
         .map_err(|e| ProgramError::UnableToOpen(err_port, e))?;
+    #[cfg(unix)]
+    port.set_exclusive(true)?;
     println!("Connected to {}", port_name);
     let mut listener = TcpListener::bind("127.0.0.1:12345").await?;
     enable_raw_mode()?;
@@ -70,9 +74,13 @@ async fn real_main() -> Result<()> {
 }
 
 async fn monitor(port: &mut Serial, listener: &mut TcpListener, opt: &Opt) -> Result<()> {
+
     let mut reader = EventStream::new();
-    let mut tx_port = port.try_clone()?;
-    let mut rx_port = BytesCodec::new().framed(port);
+    let (rx_port, tx_port) = tokio::io::split(port);
+
+    let mut serial_reader = tokio_util::codec::FramedRead::new(rx_port, StringDecoder::new());
+    let serial_sink = tokio_util::codec::FramedWrite::new(tx_port, BytesCodec::new());
+    let (serial_writer, serial_consumer) = futures::channel::mpsc::unbounded::<Bytes>();
 
     let exit_code = Event::Key(KeyEvent {
         code: KeyCode::Char('x'),
@@ -80,9 +88,11 @@ async fn monitor(port: &mut Serial, listener: &mut TcpListener, opt: &Opt) -> Re
     });
     let mut client_num : usize = 0;
     let mut clients:HashMap<usize, TcpStream> = HashMap::new();
+    let mut poll_send = serial_consumer.map(Ok).forward(serial_sink);
 
     loop{
         select! {
+            _ = poll_send => {},
             maybe_event = reader.next().fuse() => {
                 match maybe_event {
                     Some(Ok(event)) => {
@@ -90,7 +100,9 @@ async fn monitor(port: &mut Serial, listener: &mut TcpListener, opt: &Opt) -> Re
                             break;
                         }
                         if let Event::Key(key_event) = event {
-                            handle_key_event(key_event, tx_port.as_mut(), opt)?;
+                            if let Some(key) = handle_key_event(key_event, opt)? {
+                                serial_writer.unbounded_send(key).unwrap();
+                            }
                         } else {
                             println!("Unrecognized Event::{:?}\r", event);
                         }
@@ -101,13 +113,13 @@ async fn monitor(port: &mut Serial, listener: &mut TcpListener, opt: &Opt) -> Re
                     },
                 }
             },
-            maybe_serial = rx_port.next().fuse() => {
+            maybe_serial = serial_reader.next().fuse() => {
                 match maybe_serial {
                     Some(Ok(serial_event)) => {
                         if opt.debug {
                             println!("Serial Event:{:?}\r", serial_event);
                         } else {
-                            print!("{}", String::from_utf8_lossy(&serial_event));
+                            print!("{}", serial_event);
                             std::io::stdout().flush()?;
                         }
                     },
@@ -143,7 +155,7 @@ async fn monitor(port: &mut Serial, listener: &mut TcpListener, opt: &Opt) -> Re
     Ok(())
 }
 
-fn handle_key_event(key_event: KeyEvent, tx_port: &mut dyn SerialPort, opt: &Opt) -> Result<()> {
+fn handle_key_event(key_event: KeyEvent, opt: &Opt) -> Result<Option<Bytes>> {
     if opt.debug {
         println!("Event::{:?}\r", key_event);
     }
@@ -173,7 +185,7 @@ fn handle_key_event(key_event: KeyEvent, tx_port: &mut dyn SerialPort, opt: &Opt
                     buf[0] = (buf[0] + 8) & 0x1f;
                     Some(&buf[0..1])
                 } else {
-                    None
+                    Some(ch.encode_utf8(&mut buf).as_bytes())
                 }
             } else {
                 Some(ch.encode_utf8(&mut buf).as_bytes())
@@ -182,9 +194,9 @@ fn handle_key_event(key_event: KeyEvent, tx_port: &mut dyn SerialPort, opt: &Opt
         _ => None,
     };
     if let Some(key_str) = key_str {
-        tx_port.write_all(key_str)?;
+        Ok(Some(Bytes::copy_from_slice(key_str)))
+    } else {
+        Ok(None)
     }
-
-    Ok(())
 }
 
