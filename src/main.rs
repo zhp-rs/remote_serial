@@ -15,8 +15,17 @@ use error::{Result, ProgramError};
 #[derive(StructOpt, Debug)]
 #[structopt(name="remote_serial")]
 struct Opt {
+    /// Trun on debugging
     #[structopt(short, long)]
     debug: bool,
+
+    /// Filter based on name of port
+    #[structopt(short, long)]
+    port: Option<String>,
+    
+    /// Baud rate to use.
+    #[structopt(short, long, default_value = "115200")]
+    baud: u32,
 }
 
 #[tokio::main]
@@ -39,13 +48,16 @@ async fn real_main() -> Result<()> {
     let opt = Opt::from_args();
     let mut settings = tokio_serial::SerialPortSettings::default();
 
-    settings.baud_rate = 115200;
+    settings.baud_rate = opt.baud;
     settings.data_bits = DataBits::Eight;
     settings.parity = Parity::None;
     settings.stop_bits = StopBits::One;
     settings.flow_control = FlowControl::None;
 
-    let port_name = "/dev/ttyUSB0".to_string();
+    let port_name = match &opt.port {
+        Some(port) => port.clone(),
+        None => "/dev/ttyUSB0".to_string(),
+    };
     let err_port = port_name.clone();
     let mut port = tokio_serial::Serial::from_path(port_name.clone(), &settings)
         .map_err(|e| ProgramError::UnableToOpen(err_port, e))?;
