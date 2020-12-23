@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 use crossterm:: {
     event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers},
     terminal::{disable_raw_mode, enable_raw_mode},
@@ -14,6 +15,11 @@ mod string_decoder;
 use string_decoder::StringDecoder;
 mod error;
 use error::{Result, ProgramError};
+
+#[cfg(unix)]
+const PORT: &'static str = "/dev/ttyUSB0";
+#[cfg(windows)]
+const PORT: &'static str = "COM6";
 
 #[derive(StructOpt, Debug)]
 #[structopt(name="remote_serial")]
@@ -59,7 +65,7 @@ async fn real_main() -> Result<()> {
 
     let port_name = match &opt.port {
         Some(port) => port.clone(),
-        None => "/dev/ttyUSB0".to_string(),
+        None => PORT.to_string(),
     };
     let err_port = port_name.clone();
     let mut port = tokio_serial::Serial::from_path(port_name.clone(), &settings)
@@ -70,6 +76,7 @@ async fn real_main() -> Result<()> {
     enable_raw_mode()?;
     let result = monitor(&mut port, &opt).await;
     disable_raw_mode()?;
+    println!();
     result
 }
 
@@ -121,6 +128,11 @@ async fn monitor(port: &mut Serial, opt: &Opt) -> Result<()> {
                         } else {
                             print!("{}", serial_event);
                             std::io::stdout().flush()?;
+                            for (_, client) in clients.iter_mut() {
+                                if let Err(e) = client.write_all(serial_event.as_bytes()).await {
+                                    println!("Send: {:?}\r", e);
+                                }
+                            }
                         }
                     },
                     Some(Err(e)) => {
@@ -129,15 +141,14 @@ async fn monitor(port: &mut Serial, opt: &Opt) -> Result<()> {
                         break;
                     },
                     None => {
-                        println!("maybe_serial returned None\r");
+                        println!("serial returned None\r");
                     },
                 }
             },
             client = listener.next().fuse() => {
                 match client{
-                    Some(Ok(mut client)) => {
+                    Some(Ok(client)) => {
                         println!("client: {:?}\r", client.peer_addr().unwrap());
-                        client.write_all(b"hello").await?;
                         client_num += 1;
                         clients.insert(client_num, client);
                     },
