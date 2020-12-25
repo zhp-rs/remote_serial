@@ -4,11 +4,11 @@ use crossterm:: {
     terminal::{disable_raw_mode, enable_raw_mode},
 };
 use std::{collections::HashMap, io::Write};
-use futures::{future::FutureExt, select, StreamExt};
+use futures::{future::FutureExt, channel::mpsc, select, StreamExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::io::AsyncWriteExt;
 use tokio_serial::{Serial, DataBits, StopBits, Parity, FlowControl};
-use tokio_util::codec::BytesCodec;
+use tokio_util::codec::{BytesCodec, FramedRead, FramedWrite};
 use structopt::StructOpt;
 use bytes::Bytes;
 mod string_decoder;
@@ -85,9 +85,9 @@ async fn monitor(port: &mut Serial, opt: &Opt) -> Result<()> {
     let mut reader = EventStream::new();
     let (rx_port, tx_port) = tokio::io::split(port);
 
-    let mut serial_reader = tokio_util::codec::FramedRead::new(rx_port, StringDecoder::new());
-    let serial_sink = tokio_util::codec::FramedWrite::new(tx_port, BytesCodec::new());
-    let (serial_writer, serial_consumer) = futures::channel::mpsc::unbounded::<Bytes>();
+    let mut serial_reader = FramedRead::new(rx_port, StringDecoder::new());
+    let serial_sink = FramedWrite::new(tx_port, BytesCodec::new());
+    let (serial_writer, serial_consumer) = mpsc::unbounded::<Bytes>();
 
     let exit_code = Event::Key(KeyEvent {
         code: KeyCode::Char('x'),
@@ -99,7 +99,7 @@ async fn monitor(port: &mut Serial, opt: &Opt) -> Result<()> {
     let mut listener = TcpListener::bind("0.0.0.0:12345").await?;
       loop{
         select! {
-            _ = poll_send => {}
+            _ = poll_send => {},
             event = reader.next().fuse() => {
                 match event {
                     Some(Ok(event)) => {
@@ -110,6 +110,8 @@ async fn monitor(port: &mut Serial, opt: &Opt) -> Result<()> {
                             if let Some(key) = handle_key_event(key_event, opt)? {
                                 serial_writer.unbounded_send(key).unwrap();
                             }
+                        } else if let Event::Resize(_, _) = event {
+                            // skip resize event
                         } else {
                             println!("Unrecognized Event::{:?}\r", event);
                         }
