@@ -4,23 +4,22 @@ use crossterm::{
     event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers},
     terminal::{disable_raw_mode, enable_raw_mode},
 };
-use futures::{
-    channel::mpsc,
-    future::FutureExt,
-    select, StreamExt
-};
+use futures::{channel::mpsc, future::FutureExt, select, StreamExt};
 use std::{
     collections::HashMap,
     io::{Write, ErrorKind},
-    net::{Ipv4Addr, SocketAddr}
+    net::{Ipv4Addr, SocketAddr},
+    path::PathBuf,
+    fs::File,
 };
+use structopt::StructOpt;
+use structopt::clap::AppSettings;
 use tokio::{
-    io::{split, AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf},
-    net::{TcpListener, TcpStream}
+    io::{split, AsyncReadExt, ReadHalf, WriteHalf},
+    net::{TcpListener, TcpStream},
 };
 use tokio_serial::{DataBits, FlowControl, Parity, Serial, StopBits};
 use tokio_util::codec::{BytesCodec, FramedRead, FramedWrite};
-use structopt::StructOpt;
 
 mod error;
 use error::{ProgramError, Result};
@@ -32,6 +31,7 @@ const DEVICE: &'static str = "COM6";
 
 #[derive(StructOpt, Debug)]
 #[structopt(name = "remote_serial")]
+#[structopt(global_settings = &[AppSettings::ColoredHelp])]
 struct Opt {
     /// Trun on trace
     #[structopt(short, long)]
@@ -52,6 +52,10 @@ struct Opt {
     /// current server port.
     #[structopt(short, long, default_value = "6258")]
     port: u16,
+
+    /// save serial output to a file
+    #[structopt(short, long, parse(from_os_str))]
+    log: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -73,9 +77,13 @@ async fn main() -> Result<()> {
 async fn real_main() -> Result<()> {
     let opt = Opt::from_args();
 
+    let mut save_file: Vec<File> = Vec::new();
+    if let Some(pathbuf) = &opt.log {
+        save_file.push(File::create(pathbuf)?);
+    }
     enable_raw_mode()?;
     let result = match &opt.server {
-        Some(server) => client_send(&server, &opt).await,
+        Some(server) => client_send(&server, &opt, &save_file).await,
         None => {
             let mut settings = tokio_serial::SerialPortSettings::default();
             settings.baud_rate = opt.baud;
@@ -94,7 +102,7 @@ async fn real_main() -> Result<()> {
             #[cfg(unix)]
             device.set_exclusive(true)?;
             println!("Connected to {}\r", device_name);
-            monitor(&mut device, &opt).await
+            monitor(&mut device, &opt, &save_file).await
         }
     };
     disable_raw_mode()?;
@@ -102,7 +110,7 @@ async fn real_main() -> Result<()> {
     result
 }
 
-async fn client_send(server: &String, opt: &Opt) -> Result<()> {
+async fn client_send(server: &String, opt: &Opt, save_file: &Vec<File>) -> Result<()> {
     let mut reader = EventStream::new();
     let stream = TcpStream::connect(server).await?;
     let (mut receiver, mut sender) = split(stream);
@@ -121,6 +129,7 @@ async fn client_send(server: &String, opt: &Opt) -> Result<()> {
                         }
                         if let Event::Key(key_event) = event {
                             if let Some(key) = handle_key_event(key_event, opt)? {
+                                use tokio::io::AsyncWriteExt;
                                 sender.write_all(&key[..]).await?;
                             }
                         } else if let Event::Resize(_, _) = event {
@@ -144,6 +153,9 @@ async fn client_send(server: &String, opt: &Opt) -> Result<()> {
                         } else {
                             print!("{}", std::str::from_utf8(&buffer[0..len]).unwrap());
                             std::io::stdout().flush()?;
+                            for mut file in save_file {
+                                file.write_all(&buffer[0..len])?;
+                            }
                         }
                     },
                     Err(err) => {
@@ -161,7 +173,7 @@ async fn client_send(server: &String, opt: &Opt) -> Result<()> {
     Ok(())
 }
 
-async fn monitor(device: &mut Serial, opt: &Opt) -> Result<()> {
+async fn monitor(device: &mut Serial, opt: &Opt, save_file: &Vec<File>) -> Result<()> {
     let mut reader = EventStream::new();
     let (rx_device, tx_device) = split(device);
 
@@ -230,7 +242,11 @@ async fn monitor(device: &mut Serial, opt: &Opt) -> Result<()> {
                         } else {
                             print!("{}", std::str::from_utf8(&serial_event[..]).unwrap());
                             std::io::stdout().flush()?;
+                            for mut file in save_file {
+                                file.write_all(&serial_event[..])?;
+                            }
                             for (_, writer) in writers.iter_mut() {
+                                use tokio::io::AsyncWriteExt;
                                 if let Err(e) = writer.write_all(&serial_event[..]).await {
                                     println!("Send: {:?}\r", e);
                                 }
