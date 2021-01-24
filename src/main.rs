@@ -238,8 +238,11 @@ async fn monitor(device: &mut Serial, opt: &Opt) -> Result<()> {
                         }
                     },
                     Some(Err(e)) => {
-                        println!("Serial Error: {:?}\r", e);
-                        // This most likely means that the serial device has been unplugged.
+                        if e.kind() == ErrorKind::TimedOut {
+                            print!("Timeout: the serial device has been unplugged!");
+                        } else {
+                            println!("Serial Error: {:?}\r", e);
+                        }
                         break;
                     },
                     None => {
