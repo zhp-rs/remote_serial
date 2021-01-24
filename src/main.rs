@@ -1,40 +1,59 @@
 #![recursion_limit = "256"]
-use crossterm:: {
+use bytes::Bytes;
+use crossterm::{
     event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers},
     terminal::{disable_raw_mode, enable_raw_mode},
 };
-use std::{collections::HashMap, io::Write};
-use futures::{future::FutureExt, channel::mpsc, select, StreamExt};
-use tokio::net::{TcpListener, TcpStream};
-use tokio::io::AsyncWriteExt;
-use tokio_serial::{Serial, DataBits, StopBits, Parity, FlowControl};
+use futures::{
+    channel::mpsc,
+    future::FutureExt,
+    select, StreamExt
+};
+use std::{
+    collections::HashMap,
+    io::Write,
+    net::{Ipv4Addr, SocketAddr}
+};
+use tokio::{
+    io::{split, AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf},
+    net::{TcpListener, TcpStream}
+};
+use tokio_serial::{DataBits, FlowControl, Parity, Serial, StopBits};
 use tokio_util::codec::{BytesCodec, FramedRead, FramedWrite};
 use structopt::StructOpt;
-use bytes::Bytes;
+
 mod string_decoder;
 use string_decoder::StringDecoder;
 mod error;
-use error::{Result, ProgramError};
+use error::{ProgramError, Result};
 
 #[cfg(unix)]
-const PORT: &'static str = "/dev/ttyUSB0";
+const DEVICE: &'static str = "/dev/ttyACM0";
 #[cfg(windows)]
-const PORT: &'static str = "COM6";
+const DEVICE: &'static str = "COM6";
 
 #[derive(StructOpt, Debug)]
-#[structopt(name="remote_serial")]
+#[structopt(name = "remote_serial")]
 struct Opt {
-    /// Trun on debugging
+    /// Trun on trace
     #[structopt(short, long)]
-    debug: bool,
+    trace: bool,
 
-    /// Filter based on name of port
+    /// Filter based on name of device
     #[structopt(short, long)]
-    port: Option<String>,
-    
+    device: Option<String>,
+
     /// Baud rate to use.
     #[structopt(short, long, default_value = "115200")]
     baud: u32,
+
+    /// remote server ip:port.
+    #[structopt(short, long)]
+    server: Option<String>,
+
+    /// current server port.
+    #[structopt(short, long, default_value = "6258")]
+    port: u16,
 }
 
 #[tokio::main]
@@ -43,61 +62,124 @@ async fn main() -> Result<()> {
     match result {
         Ok(()) => std::process::exit(0),
         Err(ProgramError::NoPortFound) => {
-            writeln!(&mut std::io::stderr(), "No USB serial ports found")?;
+            writeln!(&mut std::io::stderr(), "No USB serial devices found")?;
             std::process::exit(1);
         }
         Err(err) => {
             writeln!(&mut std::io::stderr(), "Error: {:?}", err)?;
             std::process::exit(2);
-        },
+        }
     }
 }
 
 async fn real_main() -> Result<()> {
     let opt = Opt::from_args();
-    let mut settings = tokio_serial::SerialPortSettings::default();
 
-    settings.baud_rate = opt.baud;
-    settings.data_bits = DataBits::Eight;
-    settings.parity = Parity::None;
-    settings.stop_bits = StopBits::One;
-    settings.flow_control = FlowControl::None;
-
-    let port_name = match &opt.port {
-        Some(port) => port.clone(),
-        None => PORT.to_string(),
-    };
-    let err_port = port_name.clone();
-    let mut port = tokio_serial::Serial::from_path(port_name.clone(), &settings)
-        .map_err(|e| ProgramError::UnableToOpen(err_port, e))?;
-    #[cfg(unix)]
-    port.set_exclusive(true)?;
-    println!("Connected to {}", port_name);
     enable_raw_mode()?;
-    let result = monitor(&mut port, &opt).await;
+    let result = match &opt.server {
+        Some(server) => client_send(&server, &opt).await,
+        None => {
+            let mut settings = tokio_serial::SerialPortSettings::default();
+            settings.baud_rate = opt.baud;
+            settings.data_bits = DataBits::Eight;
+            settings.parity = Parity::None;
+            settings.stop_bits = StopBits::One;
+            settings.flow_control = FlowControl::None;
+
+            let device_name = match &opt.device {
+                Some(device) => device.clone(),
+                None => DEVICE.to_string(),
+            };
+            let err_device = device_name.clone();
+            let mut device = tokio_serial::Serial::from_path(device_name.clone(), &settings)
+                .map_err(|e| ProgramError::UnableToOpen(err_device, e))?;
+            #[cfg(unix)]
+            device.set_exclusive(true)?;
+            println!("Connected to {}\r", device_name);
+            monitor(&mut device, &opt).await
+        }
+    };
     disable_raw_mode()?;
     println!();
     result
 }
 
-async fn monitor(port: &mut Serial, opt: &Opt) -> Result<()> {
-
+async fn client_send(server: &String, opt: &Opt) -> Result<()> {
     let mut reader = EventStream::new();
-    let (rx_port, tx_port) = tokio::io::split(port);
+    let stream = TcpStream::connect(server).await?;
+    let (mut receiver, mut sender) = split(stream);
+    let exit_code = Event::Key(KeyEvent {
+        code: KeyCode::Char('x'),
+        modifiers: KeyModifiers::CONTROL,
+    });
+    loop {
+        let mut buffer = [0u8; 128];
+        select! {
+            event = reader.next().fuse() => {
+                match event {
+                    Some(Ok(event)) => {
+                        if event == exit_code {
+                            break;
+                        }
+                        if let Event::Key(key_event) = event {
+                            if let Some(key) = handle_key_event(key_event, opt)? {
+                                sender.write_all(&key[..]).await?;
+                            }
+                        } else if let Event::Resize(_, _) = event {
+                            // skip resize event
+                        } else {
+                            println!("Unrecognized Event::{:?}\r", event);
+                        }
+                    }
+                    Some(Err(e)) => println!("crossterm Error: {:?}\r", e),
+                    None => {
+                        println!("maybe_event returned None\r");
+                    },
+                }
+            },
+            result = receiver.read(&mut buffer).fuse() => {
+                match result {
+                    Ok(len) => {
+                        if len == 0 {
+                            break;
+                        } else {
+                            print!("{}", std::str::from_utf8(&buffer[0..len]).unwrap());
+                            std::io::stdout().flush()?;
+                        }
+                    },
+                    Err(_err) => {
+                        println!("{:?}\r", _err);
+                        break;
+                    }
+                }
+            },
+        };
+    }
+    Ok(())
+}
 
-    let mut serial_reader = FramedRead::new(rx_port, StringDecoder::new());
-    let serial_sink = FramedWrite::new(tx_port, BytesCodec::new());
+async fn monitor(device: &mut Serial, opt: &Opt) -> Result<()> {
+    let mut reader = EventStream::new();
+    let (rx_device, tx_device) = split(device);
+
+    let mut serial_reader = FramedRead::new(rx_device, StringDecoder::new());
+    let serial_sink = FramedWrite::new(tx_device, BytesCodec::new());
     let (serial_writer, serial_consumer) = mpsc::unbounded::<Bytes>();
 
     let exit_code = Event::Key(KeyEvent {
         code: KeyCode::Char('x'),
         modifiers: KeyModifiers::CONTROL,
     });
-    let mut client_num : usize = 0;
-    let mut clients:HashMap<usize, TcpStream> = HashMap::new();
+    let list_code = Event::Key(KeyEvent {
+        code: KeyCode::Char('y'),
+        modifiers: KeyModifiers::CONTROL,
+    });
+    let mut writers: HashMap<SocketAddr, WriteHalf<TcpStream>> = HashMap::new();
+    let (sender, mut receiver) = mpsc::unbounded::<(SocketAddr, Option<Bytes>)>();
     let mut poll_send = serial_consumer.map(Ok).forward(serial_sink);
-    let mut listener = TcpListener::bind("0.0.0.0:12345").await?;
-      loop{
+    let mut listener = TcpListener::bind((Ipv4Addr::new(0, 0, 0, 0), opt.port)).await?;
+    println!("server {:?} is running\r", listener.local_addr().unwrap());
+    loop {
         select! {
             _ = poll_send => {},
             event = reader.next().fuse() => {
@@ -105,6 +187,21 @@ async fn monitor(port: &mut Serial, opt: &Opt) -> Result<()> {
                     Some(Ok(event)) => {
                         if event == exit_code {
                             break;
+                        } else if event == list_code {
+                            match writers.len() {
+                                0 => println!("No connected!\r"),
+                                1 => {
+                                    println!("The clients is connected:\r");
+                                    println!("\taddress: {:?}\r", writers.keys().next());
+                                },
+                                n => {
+                                    println!("\r\nThese {} clients are connected:\r", n);
+                                    for key in writers.keys() {
+                                        println!("\taddress: {:?}\r", key);
+                                    }
+                                }
+                            }
+                            continue;
                         }
                         if let Event::Key(key_event) = event {
                             if let Some(key) = handle_key_event(key_event, opt)? {
@@ -125,13 +222,13 @@ async fn monitor(port: &mut Serial, opt: &Opt) -> Result<()> {
             serial = serial_reader.next().fuse() => {
                 match serial {
                     Some(Ok(serial_event)) => {
-                        if opt.debug {
+                        if opt.trace {
                             println!("Serial Event:{:?}\r", serial_event);
                         } else {
                             print!("{}", serial_event);
                             std::io::stdout().flush()?;
-                            for (_, client) in clients.iter_mut() {
-                                if let Err(e) = client.write_all(serial_event.as_bytes()).await {
+                            for (_, writer) in writers.iter_mut() {
+                                if let Err(e) = writer.write_all(serial_event.as_bytes()).await {
                                     println!("Send: {:?}\r", e);
                                 }
                             }
@@ -139,7 +236,7 @@ async fn monitor(port: &mut Serial, opt: &Opt) -> Result<()> {
                     },
                     Some(Err(e)) => {
                         println!("Serial Error: {:?}\r", e);
-                        // This most likely means that the serial port has been unplugged.
+                        // This most likely means that the serial device has been unplugged.
                         break;
                     },
                     None => {
@@ -148,11 +245,13 @@ async fn monitor(port: &mut Serial, opt: &Opt) -> Result<()> {
                 }
             },
             client = listener.next().fuse() => {
-                match client{
+                match client {
                     Some(Ok(client)) => {
-                        println!("client: {:?}\r", client.peer_addr().unwrap());
-                        client_num += 1;
-                        clients.insert(client_num, client);
+                        let addr = client.peer_addr().unwrap();
+                        println!("connect from {:?}\r", &addr);
+                        let (read, write) = split(client);
+                        writers.insert(addr.clone(), write);
+                        tokio::spawn(read_stream(addr, read, sender.clone()));
                     },
                     Some(Err(e)) => {
                         println!("tcp accept failed: {}\r", e);
@@ -163,14 +262,58 @@ async fn monitor(port: &mut Serial, opt: &Opt) -> Result<()> {
                     }
                 }
             },
+            client = receiver.next().fuse() => {
+                let (addr, buf) = client.unwrap();
+                match buf {
+                    Some(data) => {
+                        if opt.trace {
+                            println!("\r\n{:?}\r", &data);
+                        }
+                        serial_writer.unbounded_send(data).unwrap();
+                    },
+                    None => {
+                        println!("\r\nconneced {:?} is closed!\r", addr);
+                        writers.remove(&addr);
+                    }
+                }
+            },
 
         };
-    };
+    }
     Ok(())
 }
 
+async fn read_stream(
+    addr: SocketAddr,
+    mut reader: ReadHalf<TcpStream>,
+    sender: mpsc::UnboundedSender<(SocketAddr, Option<Bytes>)>,
+) {
+    loop {
+        let mut buffer = [0u8; 128];
+        select! {
+            result = reader.read(&mut buffer).fuse() => {
+                match result {
+                    Ok(len) => {
+                        if len == 0 {
+                            sender.unbounded_send((addr, None)).expect("Channel error");
+                            return;
+                        } else {
+                            sender.unbounded_send((addr, Some(Bytes::copy_from_slice(&buffer[0..len]))))
+                            .expect("Channel error");
+                        }
+                    },
+                    Err(_err) => {
+                        sender.unbounded_send((addr, None)).expect("Channel error");
+                        return;
+                    }
+                }
+            },
+        }
+    }
+}
+
 fn handle_key_event(key_event: KeyEvent, opt: &Opt) -> Result<Option<Bytes>> {
-    if opt.debug {
+    if opt.trace {
         println!("Event::{:?}\r", key_event);
     }
     let mut buf = [0; 4];
@@ -213,4 +356,3 @@ fn handle_key_event(key_event: KeyEvent, opt: &Opt) -> Result<Option<Bytes>> {
         Ok(None)
     }
 }
-
