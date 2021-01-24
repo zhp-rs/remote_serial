@@ -11,7 +11,7 @@ use futures::{
 };
 use std::{
     collections::HashMap,
-    io::Write,
+    io::{Write, ErrorKind},
     net::{Ipv4Addr, SocketAddr}
 };
 use tokio::{
@@ -22,8 +22,6 @@ use tokio_serial::{DataBits, FlowControl, Parity, Serial, StopBits};
 use tokio_util::codec::{BytesCodec, FramedRead, FramedWrite};
 use structopt::StructOpt;
 
-mod string_decoder;
-use string_decoder::StringDecoder;
 mod error;
 use error::{ProgramError, Result};
 
@@ -141,14 +139,19 @@ async fn client_send(server: &String, opt: &Opt) -> Result<()> {
                 match result {
                     Ok(len) => {
                         if len == 0 {
+                            print!("\r\nexit due to server is stoped");
                             break;
                         } else {
                             print!("{}", std::str::from_utf8(&buffer[0..len]).unwrap());
                             std::io::stdout().flush()?;
                         }
                     },
-                    Err(_err) => {
-                        println!("{:?}\r", _err);
+                    Err(err) => {
+                        if err.kind() == ErrorKind::ConnectionReset {
+                            print!("\r\nexit due to server is stoped");
+                        } else {
+                            print!("\r\n{:?}", err);
+                        }
                         break;
                     }
                 }
@@ -162,7 +165,7 @@ async fn monitor(device: &mut Serial, opt: &Opt) -> Result<()> {
     let mut reader = EventStream::new();
     let (rx_device, tx_device) = split(device);
 
-    let mut serial_reader = FramedRead::new(rx_device, StringDecoder::new());
+    let mut serial_reader = FramedRead::new(rx_device, BytesCodec::new());
     let serial_sink = FramedWrite::new(tx_device, BytesCodec::new());
     let (serial_writer, serial_consumer) = mpsc::unbounded::<Bytes>();
 
@@ -192,7 +195,7 @@ async fn monitor(device: &mut Serial, opt: &Opt) -> Result<()> {
                                 0 => println!("No connected!\r"),
                                 1 => {
                                     println!("The clients is connected:\r");
-                                    println!("\taddress: {:?}\r", writers.keys().next());
+                                    println!("\taddress: {:?}\r", writers.keys().next().unwrap());
                                 },
                                 n => {
                                     println!("\r\nThese {} clients are connected:\r", n);
@@ -225,10 +228,10 @@ async fn monitor(device: &mut Serial, opt: &Opt) -> Result<()> {
                         if opt.trace {
                             println!("Serial Event:{:?}\r", serial_event);
                         } else {
-                            print!("{}", serial_event);
+                            print!("{}", std::str::from_utf8(&serial_event[..]).unwrap());
                             std::io::stdout().flush()?;
                             for (_, writer) in writers.iter_mut() {
-                                if let Err(e) = writer.write_all(serial_event.as_bytes()).await {
+                                if let Err(e) = writer.write_all(&serial_event[..]).await {
                                     println!("Send: {:?}\r", e);
                                 }
                             }
