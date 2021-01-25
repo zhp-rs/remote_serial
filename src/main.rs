@@ -151,7 +151,7 @@ async fn client_send(server: &String, opt: &Opt, save_file: &Vec<File>) -> Resul
                             print!("\r\nexit due to server is stoped");
                             break;
                         } else {
-                            print!("{}", std::str::from_utf8(&buffer[0..len]).unwrap());
+                            print!("{}", std::string::String::from_utf8_lossy(&buffer[0..len]));
                             std::io::stdout().flush()?;
                             for mut file in save_file {
                                 file.write_all(&buffer[0..len])?;
@@ -240,7 +240,7 @@ async fn monitor(device: &mut Serial, opt: &Opt, save_file: &Vec<File>) -> Resul
                         if opt.trace {
                             println!("Serial Event:{:?}\r", serial_event);
                         } else {
-                            print!("{}", std::str::from_utf8(&serial_event[..]).unwrap());
+                            print!("{}", std::string::String::from_utf8_lossy(&serial_event[..]));
                             std::io::stdout().flush()?;
                             for mut file in save_file {
                                 file.write_all(&serial_event[..])?;
