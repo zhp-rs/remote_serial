@@ -15,7 +15,7 @@ use std::{
 use structopt::StructOpt;
 use structopt::clap::AppSettings;
 use tokio::{
-    io::{split, AsyncReadExt, ReadHalf, WriteHalf},
+    io::{split, AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf},
     net::{TcpListener, TcpStream},
 };
 use tokio_serial::{DataBits, FlowControl, Parity, Serial, StopBits};
@@ -81,9 +81,14 @@ async fn real_main() -> Result<()> {
     if let Some(pathbuf) = &opt.log {
         save_file.push(File::create(pathbuf)?);
     }
-    enable_raw_mode()?;
-    let result = match &opt.server {
-        Some(server) => client_send(&server, &opt, &save_file).await,
+    match &opt.server {
+        Some(server) => {
+            enable_raw_mode()?;
+            let result = client_send(&server, &opt, &save_file).await;
+            disable_raw_mode()?;
+            println!();
+            result
+        },
         None => {
             let mut settings = tokio_serial::SerialPortSettings::default();
             settings.baud_rate = opt.baud;
@@ -101,13 +106,14 @@ async fn real_main() -> Result<()> {
                 .map_err(|e| ProgramError::UnableToOpen(err_device, e))?;
             #[cfg(unix)]
             device.set_exclusive(true)?;
-            println!("Connected to {}\r", device_name);
-            monitor(&mut device, &opt, &save_file).await
+            println!("Connected to {}", device_name);
+            enable_raw_mode()?;
+            let result = monitor(&mut device, &opt, &save_file).await;
+            disable_raw_mode()?;
+            println!();
+            result
         }
-    };
-    disable_raw_mode()?;
-    println!();
-    result
+    }
 }
 
 async fn client_send(server: &String, opt: &Opt, save_file: &Vec<File>) -> Result<()> {
@@ -129,7 +135,6 @@ async fn client_send(server: &String, opt: &Opt, save_file: &Vec<File>) -> Resul
                         }
                         if let Event::Key(key_event) = event {
                             if let Some(key) = handle_key_event(key_event, opt)? {
-                                use tokio::io::AsyncWriteExt;
                                 sender.write_all(&key[..]).await?;
                             }
                         } else if let Event::Resize(_, _) = event {
@@ -138,9 +143,9 @@ async fn client_send(server: &String, opt: &Opt, save_file: &Vec<File>) -> Resul
                             println!("Unrecognized Event::{:?}\r", event);
                         }
                     }
-                    Some(Err(e)) => println!("crossterm Error: {:?}\r", e),
+                    Some(Err(e)) => println!("\r\ncrossterm Error: {:?}\r", e),
                     None => {
-                        println!("maybe_event returned None\r");
+                        println!("\r\nmaybe_event returned None\r");
                     },
                 }
             },
@@ -153,9 +158,7 @@ async fn client_send(server: &String, opt: &Opt, save_file: &Vec<File>) -> Resul
                         } else {
                             print!("{}", std::string::String::from_utf8_lossy(&buffer[0..len]));
                             std::io::stdout().flush()?;
-                            for mut file in save_file {
-                                file.write_all(&buffer[0..len])?;
-                            }
+                            save_file.iter().for_each(|mut file| file.write_all(&buffer[..]).unwrap());
                         }
                     },
                     Err(err) => {
@@ -204,16 +207,14 @@ async fn monitor(device: &mut Serial, opt: &Opt, save_file: &Vec<File>) -> Resul
                             break;
                         } else if event == list_code {
                             match writers.len() {
-                                0 => println!("No connected!\r"),
+                                0 => println!("\r\nNo connected!\r"),
                                 1 => {
-                                    println!("The clients is connected:\r");
+                                    println!("\r\nThe client is connected:\r");
                                     println!("\taddress: {:?}\r", writers.keys().next().unwrap());
                                 },
                                 n => {
                                     println!("\r\nThese {} clients are connected:\r", n);
-                                    for key in writers.keys() {
-                                        println!("\taddress: {:?}\r", key);
-                                    }
+                                    writers.keys().for_each(|x| println!("\taddress: {:?}\r", x));
                                 }
                             }
                             continue;
@@ -225,12 +226,12 @@ async fn monitor(device: &mut Serial, opt: &Opt, save_file: &Vec<File>) -> Resul
                         } else if let Event::Resize(_, _) = event {
                             // skip resize event
                         } else {
-                            println!("Unrecognized Event::{:?}\r", event);
+                            println!("\r\nUnrecognized Event::{:?}\r", event);
                         }
                     }
-                    Some(Err(e)) => println!("crossterm Error: {:?}\r", e),
+                    Some(Err(e)) => println!("\r\ncrossterm Error: {:?}\r", e),
                     None => {
-                        println!("maybe_event returned None\r");
+                        println!("\r\nmaybe_event returned None\r");
                     },
                 }
             },
@@ -242,11 +243,8 @@ async fn monitor(device: &mut Serial, opt: &Opt, save_file: &Vec<File>) -> Resul
                         } else {
                             print!("{}", std::string::String::from_utf8_lossy(&serial_event[..]));
                             std::io::stdout().flush()?;
-                            for mut file in save_file {
-                                file.write_all(&serial_event[..])?;
-                            }
+                            save_file.iter().for_each(|mut file| file.write_all(&serial_event[..]).unwrap());
                             for (_, writer) in writers.iter_mut() {
-                                use tokio::io::AsyncWriteExt;
                                 if let Err(e) = writer.write_all(&serial_event[..]).await {
                                     println!("Send: {:?}\r", e);
                                 }
@@ -255,14 +253,15 @@ async fn monitor(device: &mut Serial, opt: &Opt, save_file: &Vec<File>) -> Resul
                     },
                     Some(Err(e)) => {
                         if e.kind() == ErrorKind::TimedOut {
-                            print!("Timeout: the serial device has been unplugged!");
+                            print!("\r\nTimeout: the serial device has been unplugged!");
                         } else {
-                            println!("Serial Error: {:?}\r", e);
+                            println!("\r\nSerial Error: {:?}\r", e);
                         }
                         break;
                     },
                     None => {
-                        println!("serial returned None\r");
+                        println!("\r\nserial returned None\r");
+                        break;
                     },
                 }
             },
@@ -280,7 +279,7 @@ async fn monitor(device: &mut Serial, opt: &Opt, save_file: &Vec<File>) -> Resul
                         break;
                     },
                     None => {
-                        println!("client returned None\r");
+                        println!("\r\nclient returned None\r");
                     }
                 }
             },
