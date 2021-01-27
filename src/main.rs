@@ -25,9 +25,9 @@ mod error;
 use error::{ProgramError, Result};
 
 #[cfg(unix)]
-const DEVICE: &'static str = "/dev/ttyACM0";
+const DEVICE: &str = "/dev/ttyACM0";
 #[cfg(windows)]
-const DEVICE: &'static str = "COM6";
+const DEVICE: &str = "COM6";
 
 #[derive(StructOpt, Debug)]
 #[structopt(name = "remote_serial")]
@@ -57,6 +57,16 @@ struct Opt {
     #[structopt(short, long, parse(from_os_str))]
     log: Option<PathBuf>,
 }
+
+const EXIT_CODE: Event = Event::Key(KeyEvent {
+    code: KeyCode::Char('x'),
+    modifiers: KeyModifiers::CONTROL,
+});
+
+const LIST_CODE: Event = Event::Key(KeyEvent {
+    code: KeyCode::Char('y'),
+    modifiers: KeyModifiers::CONTROL,
+});
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -88,14 +98,16 @@ async fn real_main() -> Result<()> {
             disable_raw_mode()?;
             println!();
             result
-        },
+        }
         None => {
-            let mut settings = tokio_serial::SerialPortSettings::default();
-            settings.baud_rate = opt.baud;
-            settings.data_bits = DataBits::Eight;
-            settings.parity = Parity::None;
-            settings.stop_bits = StopBits::One;
-            settings.flow_control = FlowControl::None;
+            let settings = tokio_serial::SerialPortSettings {
+                baud_rate: opt.baud,
+                data_bits: DataBits::Eight,
+                parity: Parity::None,
+                stop_bits: StopBits::One,
+                flow_control: FlowControl::None,
+                ..Default::default()
+            };
 
             let device_name = match &opt.device {
                 Some(device) => device.clone(),
@@ -105,7 +117,7 @@ async fn real_main() -> Result<()> {
             let mut device = tokio_serial::Serial::from_path(device_name.clone(), &settings)
                 .map_err(|e| ProgramError::UnableToOpen(err_device, e))?;
             #[cfg(unix)]
-            device.set_exclusive(true)?;
+            device.set_exclusive(true).unwrap();
             println!("Connected to {}", device_name);
             enable_raw_mode()?;
             let result = monitor(&mut device, &opt, &save_file).await;
@@ -116,21 +128,17 @@ async fn real_main() -> Result<()> {
     }
 }
 
-async fn client_send(server: &String, opt: &Opt, save_file: &Vec<File>) -> Result<()> {
+async fn client_send(server: &str, opt: &Opt, save_file: &[File]) -> Result<()> {
     let mut reader = EventStream::new();
     let stream = TcpStream::connect(server).await?;
     let (mut receiver, mut sender) = split(stream);
-    let exit_code = Event::Key(KeyEvent {
-        code: KeyCode::Char('x'),
-        modifiers: KeyModifiers::CONTROL,
-    });
     loop {
         let mut buffer = [0u8; 128];
         select! {
             event = reader.next().fuse() => {
                 match event {
                     Some(Ok(event)) => {
-                        if event == exit_code {
+                        if event == EXIT_CODE {
                             break;
                         }
                         if let Event::Key(key_event) = event {
@@ -176,7 +184,7 @@ async fn client_send(server: &String, opt: &Opt, save_file: &Vec<File>) -> Resul
     Ok(())
 }
 
-async fn monitor(device: &mut Serial, opt: &Opt, save_file: &Vec<File>) -> Result<()> {
+async fn monitor(device: &mut Serial, opt: &Opt, save_file: &[File]) -> Result<()> {
     let mut reader = EventStream::new();
     let (rx_device, tx_device) = split(device);
 
@@ -184,14 +192,6 @@ async fn monitor(device: &mut Serial, opt: &Opt, save_file: &Vec<File>) -> Resul
     let serial_sink = FramedWrite::new(tx_device, BytesCodec::new());
     let (serial_writer, serial_consumer) = mpsc::unbounded::<Bytes>();
 
-    let exit_code = Event::Key(KeyEvent {
-        code: KeyCode::Char('x'),
-        modifiers: KeyModifiers::CONTROL,
-    });
-    let list_code = Event::Key(KeyEvent {
-        code: KeyCode::Char('y'),
-        modifiers: KeyModifiers::CONTROL,
-    });
     let mut writers: HashMap<SocketAddr, WriteHalf<TcpStream>> = HashMap::new();
     let (sender, mut receiver) = mpsc::unbounded::<(SocketAddr, Option<Bytes>)>();
     let mut poll_send = serial_consumer.map(Ok).forward(serial_sink);
@@ -203,9 +203,9 @@ async fn monitor(device: &mut Serial, opt: &Opt, save_file: &Vec<File>) -> Resul
             event = reader.next().fuse() => {
                 match event {
                     Some(Ok(event)) => {
-                        if event == exit_code {
+                        if event == EXIT_CODE {
                             break;
-                        } else if event == list_code {
+                        } else if event == LIST_CODE {
                             match writers.len() {
                                 0 => println!("\r\nNo connected!\r"),
                                 1 => {
@@ -271,7 +271,7 @@ async fn monitor(device: &mut Serial, opt: &Opt, save_file: &Vec<File>) -> Resul
                         let addr = client.peer_addr().unwrap();
                         println!("connect from {:?}\r", &addr);
                         let (read, write) = split(client);
-                        writers.insert(addr.clone(), write);
+                        writers.insert(addr, write);
                         tokio::spawn(read_stream(addr, read, sender.clone()));
                     },
                     Some(Err(e)) => {
@@ -293,7 +293,7 @@ async fn monitor(device: &mut Serial, opt: &Opt, save_file: &Vec<File>) -> Resul
                         serial_writer.unbounded_send(data).unwrap();
                     },
                     None => {
-                        println!("\r\nconneced {:?} is closed!\r", addr);
+                        println!("\r\nconnected {:?} is closed!\r", addr);
                         writers.remove(&addr);
                     }
                 }
@@ -355,10 +355,10 @@ fn handle_key_event(key_event: KeyEvent, opt: &Opt) -> Result<Option<Bytes>> {
         KeyCode::Char(ch) => {
             if key_event.modifiers & KeyModifiers::CONTROL == KeyModifiers::CONTROL {
                 buf[0] = ch as u8;
-                if (ch >= 'a' && ch <= 'z') || (ch == ' ') {
+                if ('a'..='z').contains(&ch) || (ch == ' ') {
                     buf[0] &= 0x1f;
                     Some(&buf[0..1])
-                } else if ch >= '4' && ch <= '7' {
+                } else if ('4'..='7').contains(&ch) {
                     // crossterm returns Control-4 thru 7 for \x1c thru \x1f
                     buf[0] = (buf[0] + 8) & 0x1f;
                     Some(&buf[0..1])

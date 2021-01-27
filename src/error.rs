@@ -5,7 +5,6 @@ pub enum ProgramError {
     NoPortFound,
     UnableToOpen(String, std::io::Error),
     IoError(std::io::Error),
-    SerialPortError(mio_serial::Error),
     CrossTermError,
 }
 
@@ -23,12 +22,6 @@ impl From<std::io::Error> for ProgramError {
     }
 }
 
-impl From<mio_serial::Error> for ProgramError {
-    fn from(err: mio_serial::Error) -> ProgramError {
-        ProgramError::SerialPortError(err)
-    }
-}
-
 impl fmt::Debug for ProgramError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match &*self {
@@ -40,7 +33,6 @@ impl fmt::Debug for ProgramError {
             }
             ProgramError::IoError(err) => write!(f, "{}", err),
             ProgramError::CrossTermError => write!(f, "Crossterm error"),
-            ProgramError::SerialPortError(err) => write!(f, "SerialPortError: {}", err),
         }
     }
 }
