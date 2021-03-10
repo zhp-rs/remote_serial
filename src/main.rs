@@ -166,7 +166,7 @@ async fn client_send(server: &str, opt: &Opt, save_file: &[File]) -> Result<()> 
                         } else {
                             print!("{}", std::string::String::from_utf8_lossy(&buffer[0..len]));
                             std::io::stdout().flush()?;
-                            save_file.iter().for_each(|mut file| file.write_all(&buffer[..]).unwrap());
+                            save_file.iter().for_each(|mut file| file.write_all(&buffer[0..len]).unwrap());
                         }
                     },
                     Err(err) => {
