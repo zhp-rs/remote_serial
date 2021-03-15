@@ -28,6 +28,7 @@ use error::{ProgramError, Result};
 const DEVICE: &str = "/dev/ttyACM0";
 #[cfg(windows)]
 const DEVICE: &str = "COM6";
+type ClientData = Option<(Option<Bytes>, Option<WriteHalf<TcpStream>>)>;
 
 #[derive(StructOpt, Debug)]
 #[structopt(name = "remote_serial")]
@@ -147,7 +148,7 @@ async fn client_send(server: &str, opt: &Opt, save_file: &[File]) -> Result<()> 
                             break;
                         }
                         if let Event::Key(key_event) = event {
-                            if let Some(key) = handle_key_event(key_event, opt)? {
+                            if let Some(key) = handle_key_event(key_event, opt) {
                                 sender.write_all(&key[..]).await?;
                             }
                         } else if let Event::Resize(_, _) = event {
@@ -168,8 +169,7 @@ async fn client_send(server: &str, opt: &Opt, save_file: &[File]) -> Result<()> 
                         if len == 0 {
                             print!("\r\nexit due to server is stoped");
                             break;
-                        } else {
-                            if !matched {
+                        } else if !matched {
                                 let mut buf = vec![];
                                 buf.put_u32_le(opt.cipher);
                                 sender.write_all(&buf[0..4]).await?;
@@ -179,7 +179,6 @@ async fn client_send(server: &str, opt: &Opt, save_file: &[File]) -> Result<()> 
                                 std::io::stdout().flush()?;
                                 save_file.iter().for_each(|mut file| file.write_all(&buffer[0..len]).unwrap());
                             }
-                        }
                     },
                     Err(err) => {
                         if err.kind() == ErrorKind::ConnectionReset {
@@ -205,7 +204,7 @@ async fn monitor(device: &mut Serial, opt: &Opt, save_file: &[File]) -> Result<(
     let (serial_writer, serial_consumer) = mpsc::unbounded::<Bytes>();
 
     let mut writers: HashMap<SocketAddr, WriteHalf<TcpStream>> = HashMap::new();
-    let (sender, mut receiver) = mpsc::unbounded::<(SocketAddr, Option<(Option<Bytes>, Option<WriteHalf<TcpStream>>)>)>();
+    let (sender, mut receiver) = mpsc::unbounded::<(SocketAddr, ClientData)>();
     let mut poll_send = serial_consumer.map(Ok).forward(serial_sink);
     let mut listener = TcpListener::bind((Ipv4Addr::new(0, 0, 0, 0), opt.port)).await?;
     println!("server {:?} is running\r", listener.local_addr().unwrap());
@@ -232,7 +231,7 @@ async fn monitor(device: &mut Serial, opt: &Opt, save_file: &[File]) -> Result<(
                             continue;
                         }
                         if let Event::Key(key_event) = event {
-                            if let Some(key) = handle_key_event(key_event, opt)? {
+                            if let Some(key) = handle_key_event(key_event, opt) {
                                 serial_writer.unbounded_send(key).unwrap();
                             }
                         } else if let Event::Resize(_, _) = event {
@@ -322,7 +321,7 @@ async fn monitor(device: &mut Serial, opt: &Opt, save_file: &[File]) -> Result<(
 
 async fn read_stream(
     client: TcpStream,
-    sender: mpsc::UnboundedSender<(SocketAddr, Option<(Option<Bytes>, Option<WriteHalf<TcpStream>>)>)>,
+    sender: mpsc::UnboundedSender<(SocketAddr, ClientData)>,
     cipher: u32
 ) {
     let addr = client.peer_addr().unwrap();
@@ -331,19 +330,15 @@ async fn read_stream(
     let mut matched: bool = false;
 
     writer.write_all(b"Please Enter password:").await.expect("");
-    match reader.read(&mut key).await {
-        Ok(len) => {
-            if len == 4 {
-                let val = Bytes::copy_from_slice(&key[0..len]).get_u32_le();
-                if val == cipher {
-                    matched = true;
-                    sender.unbounded_send((addr, Some((None, Some(writer))))).expect("Channel error");
-                } else {
-                    writer.write_all(b"\r\nPassword error, exited!!!\r\n").await.expect("");
-                }
+    if let Ok(len) = reader.read(&mut key).await {
+        if len == 4 {
+            let val = Bytes::copy_from_slice(&key[0..len]).get_u32_le();
+            if val == cipher {
+                matched = true;
+                sender.unbounded_send((addr, Some((None, Some(writer))))).expect("Channel error");
+            } else {
+                writer.write_all(b"\r\nPassword error, exited!!!\r\n").await.expect("");
             }
-        },
-        Err(_) => {
         }
     }
     if !matched {
@@ -375,7 +370,7 @@ async fn read_stream(
     }
 }
 
-fn handle_key_event(key_event: KeyEvent, opt: &Opt) -> Result<Option<Bytes>> {
+fn handle_key_event(key_event: KeyEvent, opt: &Opt) -> Option<Bytes> {
     if opt.trace {
         println!("Event::{:?}\r", key_event);
     }
@@ -414,8 +409,8 @@ fn handle_key_event(key_event: KeyEvent, opt: &Opt) -> Result<Option<Bytes>> {
         _ => None,
     };
     if let Some(key_str) = key_str {
-        Ok(Some(Bytes::copy_from_slice(key_str)))
+        Some(Bytes::copy_from_slice(key_str))
     } else {
-        Ok(None)
+        None
     }
 }
