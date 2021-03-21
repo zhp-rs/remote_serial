@@ -335,13 +335,13 @@ async fn read_stream(
             let val = Bytes::copy_from_slice(&key[0..len]).get_u32_le();
             if val == cipher {
                 matched = true;
-                sender.unbounded_send((addr, Some((None, Some(writer))))).expect("Channel error");
-            } else {
-                writer.write_all(b"\r\nPassword error, exited!!!\r\n").await.expect("");
             }
         }
     }
-    if !matched {
+    if matched {
+        sender.unbounded_send((addr, Some((None, Some(writer))))).expect("Channel error");
+    } else {
+        writer.write_all(b"\r\nPassword error, exited!!!\r\n").await.expect("");
         sender.unbounded_send((addr, Some((None, None)))).expect("Channel error");
         return;
     }
