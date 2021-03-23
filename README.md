@@ -1,4 +1,4 @@
-## remote uart
+## remote uart ![Master](https://github.com/zhp-rs/remote_serial/actions/workflows/rust.yml/badge.svg)
 
 ### Install
 ```bash
