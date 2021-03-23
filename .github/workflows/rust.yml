@@ -16,6 +16,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v2
+    - name: update 
+      run: sudo apt update 
     - name: Install libudev
       run: sudo apt install libudev-dev
     - name: Build
