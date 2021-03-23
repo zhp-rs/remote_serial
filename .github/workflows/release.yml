@@ -43,12 +43,12 @@ jobs:
       shell: bash
       run: cargo build --release
     - name: Release
-      uses: docker://antonyurchenko/git-release:latest
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      uses: softprops/action-gh-release@v1
       with:
-        args: |
-          target/release/remote_serial.exe
-          remote_serial_linux
-          remote_serial_arm
-        
+          files: |
+            target/release/remote_serial.exe
+            remote_serial_linux
+            remote_serial_arm          
+      env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
