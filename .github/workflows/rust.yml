@@ -16,11 +16,15 @@ jobs:
 
     steps:
     - uses: actions/checkout@v2
-    - name: update 
-      run: sudo apt update 
     - name: Install libudev
-      run: sudo apt install libudev-dev
+      run: |
+        sudo apt update
+        sudo apt install libudev-dev
     - name: Build
-      run: cargo build --verbose
+      run: cargo build --release
+    - uses: actions/upload-artifact@v2
+      with:
+        name: my-artifact
+        path: target/release/remote_serial
     - name: Run tests
       run: cargo test --verbose
