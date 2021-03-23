@@ -3,3 +3,8 @@ rustflags = ["-C", "link-args=-s"]
 
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "link-args=-s"]
+
+[target.arm-unknown-linux-gnueabihf]
+linker = "arm-linux-gnueabihf-gcc"
+rustflags = ["-C", "link-args=-s"]
+
