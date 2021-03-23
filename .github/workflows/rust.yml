@@ -10,21 +10,45 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-
+  job_linux:
     runs-on: ubuntu-latest
-
     steps:
     - uses: actions/checkout@v2
-    - name: Install libudev
+    - name: Install Env
       run: |
         sudo apt update
-        sudo apt install libudev-dev
+        sudo apt install libudev-dev gcc-arm-linux-gnueabihf
+        rustup target add arm-unknown-linux-gnueabihf
     - name: Build
-      run: cargo build --release
+      run: |
+        cargo build --release
+        cargo build --release --target arm-unknown-linux-gnueabihf
+        mkdir out/
+        cp  target/release/remote_serial out/
+        cp target/arm-unknown-linux-gnueabihf/release/remote_serial out/remote_serial_arm
     - uses: actions/upload-artifact@v2
       with:
-        name: my-artifact
-        path: target/release/remote_serial
-    - name: Run tests
-      run: cargo test --verbose
+        name: remote_serial
+        path: out/
+        retention-days: 5
+  job_windows:
+    needs: job_linux
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: Build
+      shell: bash
+      run: |
+        cargo build --release
+        mkdir out/
+        cp  target/release/remote_serial.exe out/
+    - name: Download linux image
+      uses: actions/download-artifact@v2
+      with:
+        name: remote_serial
+    - uses: actions/upload-artifact@v2
+      with:
+        name: remote_serial
+        path: out/
+        retention-days: 5
+          
