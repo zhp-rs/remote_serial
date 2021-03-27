@@ -14,15 +14,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
-    - name: Install Env
-      run: |
-        sudo apt update
-        sudo apt install libudev-dev gcc-arm-linux-gnueabihf
-        rustup target add arm-unknown-linux-gnueabihf
     - name: Build
       run: |
+        cargo install cross
+        cross build --release --target arm-unknown-linux-gnueabihf
         cargo build --release
-        cargo build --release --target arm-unknown-linux-gnueabihf
         mkdir out/
         cp  target/release/remote_serial out/
         cp target/arm-unknown-linux-gnueabihf/release/remote_serial out/remote_serial_arm
