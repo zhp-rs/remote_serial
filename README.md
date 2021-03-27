@@ -1,6 +1,5 @@
 ## remote uart
 [![main](https://github.com/zhp-rs/remote_serial/actions/workflows/main.yml/badge.svg)](https://github.com/zhp-rs/remote_serial/actions/workflows/main.yml)
-[![release](https://github.com/zhp-rs/remote_serial/actions/workflows/release.yml/badge.svg)](https://github.com/zhp-rs/remote_serial/actions/workflows/release.yml)
 ### Install
 ```bash
 cargo install --git https://github.com/zhp-rs/remote_serial

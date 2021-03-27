@@ -3,48 +3,57 @@ name: main
 on:
   push:
     branches: [ master ]
+    tag:
+      - "v*.*.*"
   pull_request:
     branches: [ master ]
+
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  job_windows:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: Build
+      run: |
+        cargo build --release
+    - uses: actions/upload-artifact@v2
+      with:
+        name: remote_serial
+        path: target/release/remote_serial.exe
+        retention-days: 5
+
   job_linux:
+    needs: job_windows
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
+    - name: Download linux image
+      uses: actions/download-artifact@v2
+      with:
+        name: remote_serial
     - name: Build
       run: |
         cargo install cross
         cross build --release --target arm-unknown-linux-gnueabihf
         cargo build --release
         mkdir out/
-        cp  target/release/remote_serial out/
+        cp  target/release/remote_serial out/remote_serial_linux
         cp target/arm-unknown-linux-gnueabihf/release/remote_serial out/remote_serial_arm
+        cp remote_serial.exe out/remote_serial.exe
     - uses: actions/upload-artifact@v2
       with:
         name: remote_serial
         path: out/
         retention-days: 5
-  job_windows:
-    needs: job_linux
-    runs-on: windows-latest
-    steps:
-    - uses: actions/checkout@v2
-    - name: Build
-      shell: bash
-      run: |
-        cargo build --release
-        mkdir out/
-        cp  target/release/remote_serial.exe out/
-    - name: Download linux image
-      uses: actions/download-artifact@v2
+    - name: Release
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v1
       with:
-        name: remote_serial
-    - uses: actions/upload-artifact@v2
-      with:
-        name: remote_serial
-        path: out/
-        retention-days: 5
-          
+          files: out/*
+      env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+ 
