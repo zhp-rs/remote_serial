@@ -32,8 +32,9 @@ jobs:
         name: remote_serial
     - name: Build
       run: |
-        cargo install cross
-        cross build --release --target arm-unknown-linux-gnueabihf
+        sudo apt install gcc-arm-linux-gnueabihf
+        rustup target add arm-unknown-linux-gnueabihf
+        cargo build --release --target arm-unknown-linux-gnueabihf
         cargo build --release
         mkdir out/
         cp  target/release/remote_serial out/remote_serial_linux
