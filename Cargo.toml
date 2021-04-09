@@ -1,6 +1,6 @@
 [package]
 name = "remote_serial"
-version = "1.0.4"
+version = "1.0.5"
 authors = ["Kabir <jxwazxzhp@126.com>"]
 edition = "2018"
 

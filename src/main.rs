@@ -4,6 +4,8 @@ use crossterm::{
     event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers},
     terminal::{disable_raw_mode, enable_raw_mode},
 };
+#[cfg(windows)]
+use crossterm::ansi_support::supports_ansi;
 use futures::{channel::mpsc, future::FutureExt, select, StreamExt};
 use std::{
     collections::HashMap,
@@ -96,6 +98,8 @@ async fn real_main() -> Result<()> {
     if let Some(pathbuf) = &opt.output {
         save_file.push(File::create(pathbuf)?);
     }
+    #[cfg(windows)]
+    supports_ansi();
     match &opt.server {
         Some(server) => {
             enable_raw_mode()?;
