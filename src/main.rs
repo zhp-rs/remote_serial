@@ -22,6 +22,7 @@ use tokio::{
 };
 use tokio_serial::{DataBits, FlowControl, Parity, Serial, StopBits};
 use tokio_util::codec::{BytesCodec, FramedRead, FramedWrite};
+use local_ipaddress;
 
 mod error;
 use error::{ProgramError, Result};
@@ -211,7 +212,7 @@ async fn monitor(device: &mut Serial, opt: &Opt, save_file: &[File]) -> Result<(
     let (sender, mut receiver) = mpsc::unbounded::<(SocketAddr, ClientData)>();
     let mut poll_send = serial_consumer.map(Ok).forward(serial_sink);
     let mut listener = TcpListener::bind((Ipv4Addr::new(0, 0, 0, 0), opt.port)).await?;
-    println!("server {:?} is running\r", listener.local_addr().unwrap());
+    println!("server {}:{} is running\r", local_ipaddress::get().unwrap(), opt.port);
     loop {
         select! {
             _ = poll_send => {},
@@ -221,14 +222,15 @@ async fn monitor(device: &mut Serial, opt: &Opt, save_file: &[File]) -> Result<(
                         if event == EXIT_CODE {
                             break;
                         } else if event == LIST_CODE {
+                            println!("\r\nCurrent server: {}:{}\r", local_ipaddress::get().unwrap(), opt.port);
                             match writers.len() {
-                                0 => println!("\r\nNo connected!\r"),
+                                0 => println!("No connected!\r"),
                                 1 => {
-                                    println!("\r\nThe client is connected:\r");
+                                    println!("The client is connected:\r");
                                     println!("\taddress: {:?}\r", writers.keys().next().unwrap());
                                 },
                                 n => {
-                                    println!("\r\nThese {} clients are connected:\r", n);
+                                    println!("These {} clients are connected:\r", n);
                                     writers.keys().for_each(|x| println!("\taddress: {:?}\r", x));
                                 }
                             }
