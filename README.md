@@ -2,7 +2,7 @@
 [![main](https://github.com/zhp-rs/remote_serial/actions/workflows/main.yml/badge.svg)](https://github.com/zhp-rs/remote_serial/actions/workflows/main.yml)
 ### Install
 ```bash
-cargo install --git https://github.com/zhp-rs/remote_serial
+cargo install remote_serial
 ```
 
 ### build with xargo
