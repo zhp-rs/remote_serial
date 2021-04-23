@@ -29,7 +29,7 @@ xargo +nightly build --target x86_64-unknown-linux-gnu --release
 help
 ```bash
 $ remote_serial -h
-remote_serial 1.0.8
+remote_serial 1.0.9
 
 USAGE:
     remote_serial [FLAGS] [OPTIONS]
