@@ -11,7 +11,7 @@ import array
 parser = argparse.ArgumentParser('remote serial tcp/ip client')
 parser.add_argument('server', type=str, help='server ip add port, sample: 127.0.0.1:1234')
 parser.add_argument('-o', '--output', type=argparse.FileType('w'), help='save log file name')
-parser.add_argument('-c', '--cipher', type=int, help='cipher code', default=32485967)
+parser.add_argument('-c', '--password', type=int, help='password', default=32485967)
 args = parser.parse_args()
 
 orig_settings = termios.tcgetattr(sys.stdin)
@@ -47,7 +47,7 @@ def main():
               if fileno == client.fileno() and event == select.POLLIN:
                     data = client.recv(1024).decode()
                     if not matched:
-                        a = array.array('I', [args.cipher]).tobytes()
+                        a = array.array('I', [args.password]).tobytes()
                         client.sendall(a)
                         matched = True
                         break

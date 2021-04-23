@@ -61,9 +61,9 @@ struct Opt {
     #[structopt(short, long, parse(from_os_str))]
     output: Option<PathBuf>,
 
-    /// cipher code
-    #[structopt(short, long, default_value = "32485967")]
-    cipher: u32,
+    /// server password
+    #[structopt(short="c", long, default_value = "32485967")]
+    password: u32,
 }
 
 const EXIT_CODE: Event = Event::Key(KeyEvent {
@@ -176,7 +176,7 @@ async fn client_send(server: &str, opt: &Opt, save_file: &[File]) -> Result<()> 
                             break;
                         } else if !matched {
                                 let mut buf = vec![];
-                                buf.put_u32_le(opt.cipher);
+                                buf.put_u32_le(opt.password);
                                 sender.write_all(&buf[0..4]).await?;
                                 matched = true;
                             } else {
@@ -285,7 +285,7 @@ async fn monitor(device: &mut Serial, opt: &Opt, save_file: &[File]) -> Result<(
             client = listener.next().fuse() => {
                 match client {
                     Some(Ok(client)) => {
-                        tokio::spawn(read_stream(client, sender.clone(), opt.cipher));
+                        tokio::spawn(read_stream(client, sender.clone(), opt.password));
                     },
                     Some(Err(e)) => {
                         println!("tcp accept failed: {}\r", e);
@@ -328,7 +328,7 @@ async fn monitor(device: &mut Serial, opt: &Opt, save_file: &[File]) -> Result<(
 async fn read_stream(
     client: TcpStream,
     sender: mpsc::UnboundedSender<(SocketAddr, ClientData)>,
-    cipher: u32
+    password: u32
 ) {
     let addr = client.peer_addr().unwrap();
     let (mut reader, mut writer) = split(client);
@@ -339,7 +339,7 @@ async fn read_stream(
     if let Ok(len) = reader.read(&mut key).await {
         if len == 4 {
             let val = Bytes::copy_from_slice(&key[0..len]).get_u32_le();
-            if val == cipher {
+            if val == password {
                 matched = true;
             }
         }

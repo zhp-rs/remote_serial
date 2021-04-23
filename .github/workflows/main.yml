@@ -39,7 +39,7 @@ jobs:
         mkdir out/
         cp  target/release/remote_serial out/remote_serial_linux
         cp target/arm-unknown-linux-gnueabihf/release/remote_serial out/remote_serial_arm
-        cp remote_serial.exe out/remote_serial.exe
+        mv remote_serial.exe out/remote_serial.exe
     - uses: actions/upload-artifact@v2
       with:
         name: remote_serial
@@ -55,6 +55,7 @@ jobs:
     - name: Publish
       if: startsWith(github.ref, 'refs/tags/')
       run: |
+        rm out -fr
         cargo login ${CRATES_IO_TOKEN}
         cargo publish
       env:

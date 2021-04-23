@@ -1,6 +1,6 @@
 [package]
 name = "remote_serial"
-version = "1.0.7"
+version = "1.0.8"
 authors = ["Kabir <jxwazxzhp@126.com>"]
 edition = "2018"
 license = "MIT"
@@ -9,7 +9,7 @@ description = "remote connect to serial"
 keywords = ["tokio", "remote", "serial", "usb", "cross"]
 categories = ["command-line-utilities", "network-programming"]
 readme = "README.md"
-include = ["src", "Cargo.toml", "README.md"]
+exclude = ["python", "Xargo.toml"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
